@@ -16,10 +16,17 @@ class PkApp : Application() {
             try {
                 YoutubeDL.getInstance().init(this)
                 FFmpeg.getInstance().init(this)
-                engineReady = true
             } catch (e: Exception) {
                 Log.e("PkApp", "Engine init failed", e)
+                return@Thread
             }
+            // YouTube changes often, so pull the newest yt-dlp on every launch.
+            try {
+                YoutubeDL.getInstance().updateYoutubeDL(this, YoutubeDL.UpdateChannel.NIGHTLY)
+            } catch (e: Exception) {
+                Log.e("PkApp", "yt-dlp update failed", e)
+            }
+            engineReady = true
         }.start()
     }
 }
