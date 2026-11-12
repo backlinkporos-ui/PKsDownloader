@@ -77,6 +77,8 @@ class DownloadService : Service() {
             val tmp = File(cacheDir, "dl")
             var ok = false
             var error: String? = null
+            var savedUri: android.net.Uri? = null
+            var savedMime: String? = null
             try {
                 val app = application as PkApp
                 var waited = 0
@@ -121,7 +123,12 @@ class DownloadService : Service() {
                 val files = tmp.listFiles()
                     ?.filter { it.isFile && it.extension != "part" && it.extension != "ytdl" }
                     .orEmpty()
-                ok = files.isNotEmpty() && files.all { Storage.saveToDownloads(this@DownloadService, it) }
+                val saved = files.map { it to Storage.saveToDownloads(this@DownloadService, it) }
+                ok = saved.isNotEmpty() && saved.all { it.second != null }
+                if (ok) {
+                    savedUri = saved.first().second
+                    savedMime = Storage.mimeFor(saved.first().first)
+                }
                 if (!ok) error = "Download finished but saving failed."
             } catch (e: YoutubeDL.CanceledException) {
                 error = "Cancelled"
@@ -129,7 +136,9 @@ class DownloadService : Service() {
                 error = "Download failed: ${e.message?.take(160)}"
             } finally {
                 tmp.deleteRecursively()
-                Downloader.history = listOf(HistoryItem(title, q.label, ok)) + Downloader.history
+                Downloader.addHistory(
+                    HistoryItem(System.currentTimeMillis(), title, q.label, ok, savedUri?.toString(), savedMime)
+                )
                 Downloader.message = if (ok) "Saved to Downloads/${Storage.FOLDER}" else error
                 if (ok) Downloader.progress = 1f
                 Downloader.downloading = false

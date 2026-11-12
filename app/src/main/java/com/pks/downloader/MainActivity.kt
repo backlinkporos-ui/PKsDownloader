@@ -1,35 +1,52 @@
 package com.pks.downloader
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -86,11 +103,43 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun Screen(vm: DownloadViewModel) {
     val clipboard = LocalClipboardManager.current
+    val ctx = LocalContext.current
+    var selected by remember { mutableStateOf(setOf<Long>()) }
+    var confirm by remember { mutableStateOf<Set<Long>?>(null) }
+    val selecting = selected.isNotEmpty()
+
+    BackHandler(enabled = selecting) { selected = emptySet() }
+
     Surface(color = Black, modifier = Modifier.fillMaxSize()) {
+        confirm?.let { ids ->
+            var alsoFiles by remember { mutableStateOf(true) }
+            AlertDialog(
+                onDismissRequest = { confirm = null },
+                title = { Text(if (ids.size == 1) "Delete this item?" else "Delete ${ids.size} items?") },
+                text = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { alsoFiles = !alsoFiles }
+                    ) {
+                        Checkbox(checked = alsoFiles, onCheckedChange = { alsoFiles = it })
+                        Text("Also delete file from phone")
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        Downloader.remove(ids, alsoFiles)
+                        selected = emptySet()
+                        confirm = null
+                    }) { Text("Delete") }
+                },
+                dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
+                containerColor = Panel, titleContentColor = White, textContentColor = White
+            )
+        }
         LazyColumn(
             modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding(),
             contentPadding = PaddingValues(20.dp),
@@ -220,25 +269,94 @@ private fun Screen(vm: DownloadViewModel) {
             }
 
             if (vm.history.isNotEmpty()) {
-                item { Text("Downloads", color = White, fontWeight = FontWeight.Bold, fontSize = 18.sp) }
-                items(vm.history) { h ->
+                item {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        if (selecting) {
+                            IconButton(onClick = { selected = emptySet() }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Cancel selection", tint = White)
+                            }
+                            Text("${selected.size} selected", color = White, fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { selected = vm.history.map { it.id }.toSet() }) {
+                                Icon(Icons.Filled.SelectAll, contentDescription = "Select all", tint = White)
+                            }
+                            IconButton(onClick = { confirm = selected }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete selected", tint = White)
+                            }
+                        } else {
+                            Text("Downloads", color = White, fontWeight = FontWeight.Bold, fontSize = 18.sp,
+                                modifier = Modifier.weight(1f))
+                            TextButton(onClick = { confirm = vm.history.map { it.id }.toSet() }) {
+                                Text("Clear all", color = White)
+                            }
+                        }
+                    }
+                }
+                items(vm.history, key = { it.id }) { h ->
+                    val isSel = h.id in selected
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Panel).padding(14.dp),
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Panel)
+                            .then(if (isSel) Modifier.border(1.dp, White, RoundedCornerShape(12.dp)) else Modifier)
+                            .combinedClickable(
+                                onClick = {
+                                    if (selecting) {
+                                        selected = if (isSel) selected - h.id else selected + h.id
+                                    } else if (h.ok) {
+                                        openItem(ctx, h)
+                                    }
+                                },
+                                onLongClick = { selected = selected + h.id }
+                            )
+                            .padding(start = 14.dp, top = 6.dp, bottom = 6.dp, end = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            if (h.ok) Icons.Filled.CheckCircle else Icons.Filled.Error,
+                            when {
+                                selecting && isSel -> Icons.Filled.CheckBox
+                                selecting -> Icons.Filled.CheckBoxOutlineBlank
+                                h.ok -> Icons.Filled.CheckCircle
+                                else -> Icons.Filled.Error
+                            },
                             contentDescription = null, tint = White
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(h.title, color = White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(h.quality + if (h.ok) "  •  Saved" else "  •  Failed", color = Grey, fontSize = 12.sp)
+                            Text(
+                                h.quality + if (h.ok) "  •  Tap to open" else "  •  Failed",
+                                color = Grey, fontSize = 12.sp
+                            )
+                        }
+                        if (!selecting) {
+                            IconButton(onClick = { confirm = setOf(h.id) }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Grey)
+                            }
+                        } else {
+                            Spacer(Modifier.width(10.dp))
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/** Opens the file in the phone's default app for that file type. */
+private fun openItem(ctx: Context, h: HistoryItem) {
+    val u = h.uri?.let { Uri.parse(it) } ?: return
+    if (!Storage.exists(ctx, u)) {
+        Toast.makeText(ctx, "File not found. It may have been deleted.", Toast.LENGTH_SHORT).show()
+        return
+    }
+    try {
+        val i = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(u, h.mime ?: "*/*")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        ctx.startActivity(i)
+    } catch (e: Exception) {
+        Toast.makeText(ctx, "No app found to open this file.", Toast.LENGTH_SHORT).show()
     }
 }
 

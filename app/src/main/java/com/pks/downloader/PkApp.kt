@@ -11,6 +11,7 @@ class PkApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        Downloader.init(this)
         // First launch unpacks python + ffmpeg, so do it off the main thread.
         Thread {
             try {
